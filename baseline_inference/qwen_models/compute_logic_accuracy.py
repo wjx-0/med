@@ -1,9 +1,27 @@
 import pandas as pd
+import argparse
 from pathlib import Path
 from tabulate import tabulate
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-output_dir = PROJECT_ROOT / "outputs" / "baseline_inference" / "qwen2.5_1.5B" / "logic_evaluation"
+
+parser = argparse.ArgumentParser(description="Compute logic accuracy for a Qwen2.5-1.5B run.")
+parser.add_argument(
+    "--run_dir",
+    type=str,
+    default=None,
+    help="Run directory containing logic_evaluation/. Defaults to the baseline run.",
+)
+args = parser.parse_args()
+
+if args.run_dir:
+    run_dir = Path(args.run_dir).expanduser()
+    if not run_dir.is_absolute():
+        run_dir = (Path.cwd() / run_dir).resolve()
+else:
+    run_dir = PROJECT_ROOT / "outputs" / "baseline_inference" / "qwen2.5_1.5B"
+
+output_dir = run_dir / "logic_evaluation"
 
 languages = [
     "Amharic", "Bengali", "French", "Hausa", "Hindi", "Japanese", "Korean",

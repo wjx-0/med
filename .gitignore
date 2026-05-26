@@ -6,3 +6,5 @@ __pycache__/
 .venv/
 outputs/
 output/
+saves/
+.DS_Store

@@ -33,6 +33,15 @@ parser = argparse.ArgumentParser(description="Evaluate logical reasoning of resp
 parser.add_argument("--language", type=str, default=None, help="Language to evaluate, e.g. Spanish. Required if --all is not used.")
 parser.add_argument("--all", action="store_true", help="Process all languages instead of a single one.")
 parser.add_argument("--num_samples", type=int, default=-1, help="Number of samples to process per language. Use -1 to process all.")
+parser.add_argument(
+    "--run_dir",
+    type=str,
+    default=None,
+    help=(
+        "Directory containing generations/ and receiving logic_evaluation/. "
+        "Defaults to the Qwen2.5-1.5B baseline run."
+    ),
+)
 args = parser.parse_args()
 
 languages = [
@@ -47,8 +56,15 @@ else:
         raise ValueError("Must provide --language or use --all flag.")
     selected_languages = [args.language.strip().capitalize()]
 
-dataset_dir = PROJECT_ROOT / "outputs" / "baseline_inference" / "qwen2.5_1.5B" / "generations"
-output_dir = PROJECT_ROOT / "outputs" / "baseline_inference" / "qwen2.5_1.5B" / "logic_evaluation"
+if args.run_dir:
+    run_dir = Path(args.run_dir).expanduser()
+    if not run_dir.is_absolute():
+        run_dir = (Path.cwd() / run_dir).resolve()
+else:
+    run_dir = PROJECT_ROOT / "outputs" / "baseline_inference" / "qwen2.5_1.5B"
+
+dataset_dir = run_dir / "generations"
+output_dir = run_dir / "logic_evaluation"
 output_dir.mkdir(parents=True, exist_ok=True)
 
 

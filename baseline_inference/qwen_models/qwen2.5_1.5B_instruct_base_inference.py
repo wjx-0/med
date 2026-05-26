@@ -15,8 +15,8 @@ Key features:
 
 import os
 
-os.environ['HF_HOME'] = '/scratch/reh6ed/hf_cache'
-os.environ['TRANSFORMERS_CACHE'] = '/scratch/reh6ed/hf_cache'
+os.environ.setdefault('HF_HOME', '/root/hf_cache')
+os.environ.setdefault('TRANSFORMERS_CACHE', '/root/hf_cache')
 
 
 import pandas as pd
@@ -82,40 +82,47 @@ tokenizer = AutoTokenizer.from_pretrained(
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 
+tokenizer.padding_side = "left"
+
 print("Model and tokenizer loaded successfully.")
 
 
 # -------------------------------
 # Response Generation Function
 # -------------------------------
-def generate_response(question: str, max_new_tokens: int = 1024) -> str:
+def generate_responses(questions: list[str], max_new_tokens: int = 1024) -> list[str]:
     """
-    Generates a response for a given question using the model's chat template.
+    Generates responses for a batch of questions using the model's chat template.
     
     Args:
-        question (str): The input question/prompt.
+        questions (list[str]): The input questions/prompts.
         max_new_tokens (int): Maximum number of new tokens to generate.
     
     Returns:
-        str: The generated response text.
+        list[str]: The generated response texts.
     """
-    # Construct messages for chat template
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": question},
-    ]
+    prompts = []
+    for question in questions:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": question},
+        ]
+        prompt = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        prompts.append(prompt)
+
+    # Tokenize the prompts as a padded batch and move to device
+    inputs = tokenizer(
+        prompts,
+        return_tensors="pt",
+        padding=True,
+    ).to(model.device)
+    input_width = inputs.input_ids.shape[1]
     
-    # Apply chat template to create the full prompt
-    prompt = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-    )
-    
-    # Tokenize the prompt and move to device
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    
-    # Generate response with no_grad for inference efficiency
+    # Generate responses with no_grad for inference efficiency
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
@@ -128,14 +135,17 @@ def generate_response(question: str, max_new_tokens: int = 1024) -> str:
             eos_token_id=tokenizer.eos_token_id,
             pad_token_id=tokenizer.pad_token_id,
         )
-    
-    # Decode only the new tokens (excluding input)
-    response = tokenizer.decode(
-        outputs[0][len(inputs.input_ids[0]):], 
-        skip_special_tokens=True
-    )
-    
-    return response.strip()
+
+    # Decode only the new tokens (excluding padded input prompt)
+    responses = []
+    for output_ids in outputs:
+        response = tokenizer.decode(
+            output_ids[input_width:],
+            skip_special_tokens=True
+        )
+        responses.append(response.strip())
+
+    return responses
 
 # -------------------------------
 # Main Processing Section
@@ -144,6 +154,7 @@ if __name__ == "__main__":
     # User inputs for flexibility
     selected_language = input("Enter the language to process (or 'all' for all languages): ").strip().capitalize()
     num_samples = int(input("Enter the number of samples per language (-1 for all): "))
+    batch_size = max(1, int(input("Enter batch size for inference (e.g., 8): ")))
     
     # Determine languages to process
     if selected_language.lower() == 'all':
@@ -192,21 +203,32 @@ if __name__ == "__main__":
                     df.iloc[:completed_rows] = existing_df.iloc[:completed_rows]
                     resume_from = completed_rows
         
-        # Generate responses row by row, skipping completed ones
-        for idx in range(resume_from, len(df)):
-            if pd.notna(df.at[idx, 'Test Response']) and df.at[idx, 'Test Response']:  # Skip if already filled
-                continue
-            
-            question = df.at[idx, 'Question']
-            print(f"Generating response for row {idx+1}/{process_rows} in {lang}...")
-            
-            # Generate and assign response
-            test_response = generate_response(question)
-            df.at[idx, 'Test Response'] = test_response
-            
-            # Save progress after each generation to avoid data loss
+        # Generate responses in batches, skipping completed rows
+        pending_indices = [
+            idx for idx in range(resume_from, len(df))
+            if not (
+                pd.notna(df.at[idx, 'Test Response'])
+                and str(df.at[idx, 'Test Response']).strip()
+            )
+        ]
+
+        for start in range(0, len(pending_indices), batch_size):
+            batch_indices = pending_indices[start:start + batch_size]
+            questions = [df.at[idx, 'Question'] for idx in batch_indices]
+
+            print(
+                f"Generating responses for rows "
+                f"{batch_indices[0] + 1}-{batch_indices[-1] + 1}/{process_rows} in {lang}..."
+            )
+
+            # Generate and assign responses
+            batch_responses = generate_responses(questions)
+            for idx, test_response in zip(batch_indices, batch_responses):
+                df.at[idx, 'Test Response'] = test_response
+
+            # Save progress after each batch to avoid data loss
             df.to_csv(save_path, index=False)
-            print(f"Saved progress for row {idx+1}.")
+            print(f"Saved progress through row {batch_indices[-1] + 1}.")
         
         # Final confirmation
         print(f"Completed processing for {lang}. Full results saved to: {save_path}")

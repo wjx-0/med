@@ -1,0 +1,45 @@
+### model
+model_name_or_path: Qwen/Qwen2.5-1.5B-Instruct
+trust_remote_code: true
+cache_dir: /root/hf_cache
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+quantization_bit: 4
+quantization_method: bitsandbytes
+double_quantization: true
+
+### dataset
+dataset: curemed_sft_spanish_yoruba
+dataset_dir: /root/med/sft/llamafactory_data
+template: qwen
+cutoff_len: 4096
+overwrite_cache: true
+preprocessing_num_workers: 4
+packing: false
+
+### output
+output_dir: /root/med/saves/qwen2.5_1.5B_qlora_spanish_yoruba
+logging_steps: 5
+save_strategy: epoch
+plot_loss: true
+overwrite_output_dir: true
+report_to: none
+
+### train
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 8
+learning_rate: 2.0e-4
+num_train_epochs: 1.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+bf16: true
+ddp_timeout: 180000000
+optim: paged_adamw_8bit
+
