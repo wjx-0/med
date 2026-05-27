@@ -4,6 +4,7 @@ import pandas as pd
 import argparse
 import time
 import os
+import re
 from pathlib import Path
 from tqdm import tqdm
 
@@ -33,6 +34,11 @@ parser = argparse.ArgumentParser(description="Evaluate language of responses usi
 parser.add_argument("--language", type=str, default=None, help="Language to evaluate, e.g. Spanish. Required if --all is not used.")
 parser.add_argument("--all", action="store_true", help="Process all languages instead of a single one.")
 parser.add_argument("--num_samples", type=int, default=-1, help="Number of samples to process per language. Use -1 to process all.")
+parser.add_argument(
+    "--answer_only",
+    action="store_true",
+    help="Evaluate only the text inside <answer>...</answer>. Useful for SFT/RFT outputs with English reasoning.",
+)
 parser.add_argument(
     "--run_dir",
     type=str,
@@ -66,6 +72,16 @@ else:
 dataset_dir = run_dir / "generations"
 output_dir = run_dir / "language_evaluation"
 output_dir.mkdir(parents=True, exist_ok=True)
+
+
+def extract_answer_text(test_response: str) -> str:
+    """
+    Return the final answer text if <answer> tags are present, otherwise return the full response.
+    """
+    matches = re.findall(r"<answer>(.*?)</answer>", test_response, flags=re.IGNORECASE | re.DOTALL)
+    if matches:
+        return matches[-1].strip()
+    return test_response.strip()
 
 
 def get_language_evaluation(question, test_response, language):
@@ -108,7 +124,10 @@ for lang in selected_languages:
         continue
 
     input_csv_path = dataset_dir / f"{lang}_qwen2.5_1.5B_instruct_inference_data.csv"
-    output_csv_path = output_dir / f"{lang}_qwen2.5_1.5B_language_evaluation.csv"
+    if args.answer_only:
+        output_csv_path = output_dir / f"{lang}_qwen2.5_1.5B_answer_language_evaluation.csv"
+    else:
+        output_csv_path = output_dir / f"{lang}_qwen2.5_1.5B_language_evaluation.csv"
 
     print(f"Loading data for {lang} from {input_csv_path}...")
     if not input_csv_path.exists():
@@ -150,7 +169,8 @@ for lang in selected_languages:
             print(f"Skipping invalid row at index {idx} for {lang}")
             continue
 
-        language_evaluation = get_language_evaluation(question, test_response, lang)
+        response_to_evaluate = extract_answer_text(test_response) if args.answer_only else test_response
+        language_evaluation = get_language_evaluation(question, response_to_evaluate, lang)
         if language_evaluation is not None:
             df.at[idx, "Language_Score"] = language_evaluation
 

@@ -7,6 +7,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 parser = argparse.ArgumentParser(description="Compute language accuracy for a Qwen2.5-1.5B run.")
 parser.add_argument(
+    "--answer_only",
+    action="store_true",
+    help="Read answer-only language evaluation files.",
+)
+parser.add_argument(
     "--run_dir",
     type=str,
     default=None,
@@ -36,7 +41,10 @@ def compute_language_stats():
     global_total = 0
 
     for lang in languages:
-        csv_path = output_dir / f"{lang}_qwen2.5_1.5B_language_evaluation.csv"
+        if args.answer_only:
+            csv_path = output_dir / f"{lang}_qwen2.5_1.5B_answer_language_evaluation.csv"
+        else:
+            csv_path = output_dir / f"{lang}_qwen2.5_1.5B_language_evaluation.csv"
 
         if not csv_path.exists():
             print(f"Skipping {lang}: CSV not found at {csv_path}.")

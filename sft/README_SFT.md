@@ -68,7 +68,7 @@ llamafactory-cli train /root/med/sft/configs/qwen2.5_1.5B_qlora_spanish_yoruba.y
 Run SFT LoRA inference on the server:
 
 ```bash
-cd /root/med/baseline_inference/qwen_models
+cd /root/med/sft/inference
 python qwen2.5_1.5B_instruct_sft_lora_inference.py
 ```
 
@@ -97,7 +97,7 @@ python qwen2.5_1.5B_instruct_sft_lora_inference.py \
 
 ## Local Evaluation
 
-After downloading `generations/` from the server to local `med/outputs/sft/...`, reuse the existing judge scripts:
+After downloading `generations/` from the server to local `med/outputs/sft/...`, run the shared judge scripts against the SFT output directory:
 
 ```bash
 cd /Users/wjx/Downloads/java/llm/cure-med/med/baseline_inference/qwen_models

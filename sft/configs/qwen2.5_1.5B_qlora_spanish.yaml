@@ -19,7 +19,7 @@ double_quantization: true
 dataset: curemed_sft_spanish
 dataset_dir: /root/med/sft/llamafactory_data
 template: qwen
-cutoff_len: 2048
+cutoff_len: 4096
 overwrite_cache: true
 preprocessing_num_workers: 4
 packing: false
@@ -33,9 +33,9 @@ overwrite_output_dir: true
 report_to: none
 
 ### train
-per_device_train_batch_size: 2
+per_device_train_batch_size: 4
 gradient_accumulation_steps: 8
-learning_rate: 2.0e-4
+learning_rate: 1e-5
 num_train_epochs: 1.0
 lr_scheduler_type: cosine
 warmup_ratio: 0.1

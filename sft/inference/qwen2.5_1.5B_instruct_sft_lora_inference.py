@@ -4,14 +4,16 @@ import argparse
 import os
 from pathlib import Path
 
+os.environ.setdefault("HF_HOME", "/root/hf_cache")
+os.environ.setdefault("TRANSFORMERS_CACHE", "/root/hf_cache")
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 import pandas as pd
 import torch
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-
-os.environ.setdefault("HF_HOME", "/root/hf_cache")
-os.environ.setdefault("TRANSFORMERS_CACHE", "/root/hf_cache")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ADAPTER_DIR = PROJECT_ROOT / "saves" / "qwen2.5_1.5B_qlora_spanish"
@@ -60,11 +62,16 @@ def load_model_and_tokenizer(adapter_dir: Path):
         torch_dtype=torch.float16,
         device_map="auto",
         trust_remote_code=True,
+        local_files_only=True,
     )
-    model = PeftModel.from_pretrained(base_model, adapter_dir)
+    model = PeftModel.from_pretrained(base_model, adapter_dir, local_files_only=True)
     model.eval()
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        trust_remote_code=True,
+        local_files_only=True,
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
@@ -81,10 +88,13 @@ def generate_responses(model, tokenizer, questions: list[str], language: str, ma
             {
                 "role": "user",
                 "content": (
-                    f"The question is in {language}. {question} "
-                    "Please think carefully with English-guided reasoning and code-switching, "
-                    "return your reasoning inside <thinking> </thinking> tags, and the final direct answer "
-                    "inside <answer> </answer> tags. Final answer ONLY in the language of the question."
+                    f"The question is in {language}. {question}\n"
+                    "Please think carefully with English-guided reasoning and natural code-switching. "
+                    "Return your reasoning inside <thinking> </thinking> tags, using numbered "
+                    "<step1>, <step2>, ... tags when appropriate. "
+                    f"Return the final answer inside <answer> </answer> tags. "
+                    f"The final answer inside <answer> MUST be written only in {language}. "
+                    "Do not use English or any other language inside <answer>."
                 ),
             },
         ]
