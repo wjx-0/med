@@ -27,18 +27,7 @@ languages = [
 test_dir = PROJECT_ROOT / "data" / "test"
 model_name = "Qwen/Qwen2.5-1.5B-Instruct"
 
-system_prompt = """You are an expert multilingual medical doctor. When answering a medical question, follow these steps:
-1. First, search your internal knowledge base thoroughly for relevant background information about the topic.
-2. Understand and reason the question fully in English first.
-3. Reason mainly in English, but code-switch naturally into the target language whenever useful for clarity or domain accuracy.
-4. Consider multiple perspectives and potential answers before settling on your final response.
-5. Evaluate the confidence in your answer based on the information available to you.
-6. Provide the final answer clearly in the target language, making sure it's well-supported by your reasoning.
-7. If there are significant uncertainties or gaps in your knowledge, acknowledge them transparently.
-
-Your goal is to provide accurate, well-reasoned responses that demonstrate depth of understanding, not just surface-level answers.
-
-You are an expert multilingual medical doctor. When answering a medical question, think and reason mainly in English with natural code-switching to the target language. Use multi-step reasoning wrapped in <step> tags inside <thinking>."""
+system_prompt = """You are an expert multilingual reasoning assistant with strong medical knowledge. Think carefully in English first, code-switching naturally into the target language when useful for clarity or domain accuracy. For medical questions, use appropriate clinical knowledge and acknowledge meaningful uncertainty. Provide accurate, well-supported responses with concise multi-step reasoning inside <thinking> and a final answer inside <answer>."""
 
 
 def parse_args() -> argparse.Namespace:
@@ -80,6 +69,52 @@ def load_model_and_tokenizer(adapter_dir: Path):
     return model, tokenizer
 
 
+def make_user_prompt(question: str, language: str) -> str:
+    return (
+        f"The question is in {language}. {question}\n"
+        "Think through the problem carefully in English, code-switching naturally into the target "
+        "language when it helps. If the question is medical, use appropriate medical knowledge and "
+        "note meaningful uncertainty. Return your reasoning inside <thinking> tags with ordered "
+        f"<step1>, <step2>, ... steps. Return the final direct answer inside <answer> tags, written only in {language}."
+    )
+
+
+def has_response(value) -> bool:
+    return pd.notna(value) and bool(str(value).strip())
+
+
+def restore_existing_responses(df: pd.DataFrame, save_path: Path) -> pd.DataFrame:
+    if not save_path.exists():
+        return df
+
+    existing_df = pd.read_csv(save_path)
+    if "Question" not in existing_df.columns or "Test Response" not in existing_df.columns:
+        print(f"Existing output {save_path.name} is missing Question/Test Response; starting without resume.")
+        return df
+
+    copied_rows = 0
+    skipped_mismatches = 0
+    compare_rows = min(len(df), len(existing_df))
+    for idx in range(compare_rows):
+        if str(existing_df.at[idx, "Question"]) != str(df.at[idx, "Question"]):
+            skipped_mismatches += 1
+            continue
+        response = existing_df.at[idx, "Test Response"]
+        if has_response(response):
+            df.at[idx, "Test Response"] = response
+            copied_rows += 1
+
+    if copied_rows or skipped_mismatches or len(existing_df) != len(df):
+        print(
+            f"Resumed {copied_rows} completed rows from {save_path.name}; "
+            f"skipped {skipped_mismatches} question mismatches."
+        )
+    if len(existing_df) != len(df):
+        print(f"Existing output has {len(existing_df)} rows; current run has {len(df)} rows.")
+
+    return df
+
+
 def generate_responses(model, tokenizer, questions: list[str], language: str, max_new_tokens: int) -> list[str]:
     prompts = []
     for question in questions:
@@ -87,15 +122,7 @@ def generate_responses(model, tokenizer, questions: list[str], language: str, ma
             {"role": "system", "content": system_prompt},
             {
                 "role": "user",
-                "content": (
-                    f"The question is in {language}. {question}\n"
-                    "Please think carefully with English-guided reasoning and natural code-switching. "
-                    "Return your reasoning inside <thinking> </thinking> tags, using numbered "
-                    "<step1>, <step2>, ... tags when appropriate. "
-                    f"Return the final answer inside <answer> </answer> tags. "
-                    f"The final answer inside <answer> MUST be written only in {language}. "
-                    "Do not use English or any other language inside <answer>."
-                ),
+                "content": make_user_prompt(question, language),
             },
         ]
         prompts.append(
@@ -163,24 +190,12 @@ def main() -> None:
             df["Test Response"] = ""
 
         save_path = output_dir / f"{lang}_qwen2.5_1.5B_instruct_inference_data.csv"
+        df = restore_existing_responses(df, save_path)
 
-        resume_from = 0
-        if save_path.exists():
-            existing_df = pd.read_csv(save_path)
-            if "Test Response" in existing_df.columns:
-                completed_rows = existing_df[
-                    existing_df["Test Response"].notna()
-                    & existing_df["Test Response"].astype(str).str.strip().astype(bool)
-                ].shape[0]
-                if 0 < completed_rows <= len(df):
-                    print(f"Resuming from {completed_rows} completed rows in {save_path.name}")
-                    df.iloc[:completed_rows] = existing_df.iloc[:completed_rows]
-                    resume_from = completed_rows
-
-        pending_indices = [
-            idx for idx in range(resume_from, len(df))
-            if not (pd.notna(df.at[idx, "Test Response"]) and str(df.at[idx, "Test Response"]).strip())
-        ]
+        pending_indices = [idx for idx in range(len(df)) if not has_response(df.at[idx, "Test Response"])]
+        if not pending_indices:
+            print(f"No pending rows for {lang}; existing results are complete.")
+            continue
 
         for start in range(0, len(pending_indices), batch_size):
             batch_indices = pending_indices[start:start + batch_size]

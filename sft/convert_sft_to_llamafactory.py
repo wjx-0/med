@@ -5,21 +5,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+from collections import Counter
 from pathlib import Path
 
 
-SYSTEM_PROMPT = """You are an expert multilingual medical doctor. When answering a medical question, follow these steps:
-1. First, search your internal knowledge base thoroughly for relevant background information about the topic.
-2. Understand and reason the question fully in English first.
-3. Reason mainly in English, but code-switch naturally into the target language whenever useful for clarity or domain accuracy.
-4. Consider multiple perspectives and potential answers before settling on your final response.
-5. Evaluate the confidence in your answer based on the information available to you.
-6. Provide the final answer clearly in the target language, making sure it's well-supported by your reasoning.
-7. If there are significant uncertainties or gaps in your knowledge, acknowledge them transparently.
+SYSTEM_PROMPT = """You are an expert multilingual reasoning assistant with strong medical knowledge. Think carefully in English first, code-switching naturally into the target language when useful for clarity or domain accuracy. For medical questions, use appropriate clinical knowledge and acknowledge meaningful uncertainty. Provide accurate, well-supported responses with concise multi-step reasoning inside <thinking> and a final answer inside <answer>."""
 
-Your goal is to provide accurate, well-reasoned responses that demonstrate depth of understanding, not just surface-level answers.
-
-You are an expert multilingual medical doctor. When answering a medical question, think and reason mainly in English with natural code-switching to the target language. Use multi-step reasoning wrapped in <step> tags inside <thinking>."""
+ANSWER_BLOCK_RE = re.compile(r"<answer>(.*?)</answer>", flags=re.IGNORECASE | re.DOTALL)
+THINKING_BLOCK_RE = re.compile(r"<thinking>(.*?)</thinking>", flags=re.IGNORECASE | re.DOTALL)
+THINKING_TAG_RE = re.compile(r"</?thinking>", flags=re.IGNORECASE)
+STEP_OPEN_RE = re.compile(r"<step\d+>", flags=re.IGNORECASE)
+STEP_TAG_RE = re.compile(r"</?step\d+>", flags=re.IGNORECASE)
 
 
 def default_source_dir() -> Path:
@@ -28,17 +25,76 @@ def default_source_dir() -> Path:
     return workspace_root / "cure-med" / "datasets" / "SFT_data"
 
 
+def strip_answer_blocks(text: str) -> str:
+    return ANSWER_BLOCK_RE.sub("", text)
+
+
+def extract_thinking_body(reasoning: str) -> str:
+    text = strip_answer_blocks(reasoning.strip())
+    thinking_blocks = [match.strip() for match in THINKING_BLOCK_RE.findall(text) if match.strip()]
+    if thinking_blocks:
+        return "\n\n".join(thinking_blocks)
+    return THINKING_TAG_RE.sub("", text).strip()
+
+
+def split_reasoning_steps(reasoning: str) -> list[str]:
+    body = extract_thinking_body(reasoning)
+    if not body:
+        raise ValueError("reasoning is empty after removing tags")
+
+    if STEP_OPEN_RE.search(body):
+        chunks = STEP_OPEN_RE.split(body)
+        steps = []
+        for chunk in chunks:
+            clean = STEP_TAG_RE.sub("", chunk).strip()
+            if clean:
+                steps.append(clean)
+        if steps:
+            return steps
+
+    return [chunk.strip() for chunk in re.split(r"\n\s*\n+", STEP_TAG_RE.sub("", body)) if chunk.strip()]
+
+
+def normalize_reasoning(reasoning: str) -> str:
+    steps = split_reasoning_steps(reasoning)
+    if not steps:
+        raise ValueError("reasoning has no usable steps")
+
+    lines = ["<thinking>"]
+    for idx, step in enumerate(steps, start=1):
+        lines.extend([f"<step{idx}>", step, f"</step{idx}>"])
+    lines.append("</thinking>")
+    return "\n".join(lines)
+
+
+def normalize_answer(answer: str) -> str:
+    text = answer.strip()
+    matches = [match.strip() for match in ANSWER_BLOCK_RE.findall(text) if match.strip()]
+    if matches:
+        text = matches[-1]
+    else:
+        text = ANSWER_BLOCK_RE.sub("", text).strip()
+    if not text:
+        raise ValueError("answer is empty after removing tags")
+    return f"<answer>{text}</answer>"
+
+
+def make_user_prompt(question: str, language: str) -> str:
+    return (
+        f"The question is in {language}. {question}\n"
+        "Think through the problem carefully in English, code-switching naturally into the target "
+        "language when it helps. If the question is medical, use appropriate medical knowledge and "
+        "note meaningful uncertainty. Return your reasoning inside <thinking> tags with ordered "
+        f"<step1>, <step2>, ... steps. Return the final direct answer inside <answer> tags, written only in {language}."
+    )
+
+
 def make_example(raw: dict) -> dict:
     language = raw["language"]
     question = raw["question"]
-    reasoning = raw["reasoning"].strip()
-    answer = raw["answer"].strip()
-    user_prompt = (
-        f"The question is in {language}. {question} "
-        "Please think carefully with English-guided reasoning and code-switching, "
-        "return your reasoning inside <thinking> </thinking> tags, and the final direct answer "
-        f"inside <answer> </answer> tags. Final answer ONLY in {language}."
-    )
+    reasoning = normalize_reasoning(raw["reasoning"])
+    answer = normalize_answer(raw["answer"])
+    user_prompt = make_user_prompt(question, language)
 
     return {
         "messages": [
@@ -117,6 +173,52 @@ def write_dataset_info(output_dir: Path) -> None:
     )
 
 
+def has_ordered_step_tags(text: str) -> bool:
+    stack = []
+    for match in re.finditer(r"</?step(\d+)>", text, flags=re.IGNORECASE):
+        step_no = match.group(1)
+        is_close = text[match.start() + 1] == "/"
+        if is_close:
+            if not stack or stack.pop() != step_no:
+                return False
+        else:
+            stack.append(step_no)
+    return not stack
+
+
+def validate_examples(dataset_name: str, examples: list[dict]) -> None:
+    duplicate_counter = Counter()
+    errors = []
+
+    for idx, example in enumerate(examples, start=1):
+        messages = example.get("messages", [])
+        roles = [message.get("role") for message in messages]
+        if roles != ["system", "user", "assistant"]:
+            errors.append(f"{dataset_name}:{idx} invalid roles: {roles}")
+            continue
+
+        user_content = messages[1].get("content", "")
+        assistant_content = messages[2].get("content", "")
+        duplicate_counter[user_content] += 1
+
+        if assistant_content.count("<thinking>") != 1 or assistant_content.count("</thinking>") != 1:
+            errors.append(f"{dataset_name}:{idx} invalid thinking tags")
+        if assistant_content.count("<answer>") != 1 or assistant_content.count("</answer>") != 1:
+            errors.append(f"{dataset_name}:{idx} invalid answer tags")
+        if not has_ordered_step_tags(assistant_content):
+            errors.append(f"{dataset_name}:{idx} invalid step tags")
+
+    if errors:
+        sample = "\n".join(errors[:10])
+        raise ValueError(f"{dataset_name} validation failed with {len(errors)} errors:\n{sample}")
+
+    duplicate_questions = sum(count - 1 for count in duplicate_counter.values() if count > 1)
+    print(
+        f"Validated {dataset_name}: {len(examples)} rows, "
+        f"{duplicate_questions} duplicate user prompts kept."
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -141,15 +243,20 @@ def main() -> None:
 
     spanish = read_jsonl(source_dir / "Spanish.jsonl")
     yoruba = read_jsonl(source_dir / "Yoruba.jsonl")
+    combined = spanish + yoruba
+
+    validate_examples("curemed_sft_spanish", spanish)
+    validate_examples("curemed_sft_yoruba", yoruba)
+    validate_examples("curemed_sft_spanish_yoruba", combined)
 
     write_jsonl(output_dir / "curemed_sft_spanish.jsonl", spanish)
     write_jsonl(output_dir / "curemed_sft_yoruba.jsonl", yoruba)
-    write_jsonl(output_dir / "curemed_sft_spanish_yoruba.jsonl", spanish + yoruba)
+    write_jsonl(output_dir / "curemed_sft_spanish_yoruba.jsonl", combined)
     write_dataset_info(output_dir)
 
     print(f"Wrote Spanish examples: {len(spanish)}")
     print(f"Wrote Yoruba examples: {len(yoruba)}")
-    print(f"Wrote combined examples: {len(spanish) + len(yoruba)}")
+    print(f"Wrote combined examples: {len(combined)}")
     print(f"Output directory: {output_dir}")
 
 

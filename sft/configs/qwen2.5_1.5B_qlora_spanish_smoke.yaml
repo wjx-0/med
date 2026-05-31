@@ -20,23 +20,25 @@ dataset: curemed_sft_spanish
 dataset_dir: /root/med/sft/llamafactory_data
 template: qwen
 cutoff_len: 4096
+max_samples: 32
 overwrite_cache: true
-preprocessing_num_workers: 4
+preprocessing_num_workers: 2
 packing: false
 
 ### output
-output_dir: /root/med/saves/qwen2.5_1.5B_qlora_spanish
-logging_steps: 5
-save_strategy: epoch
-plot_loss: true
+output_dir: /root/med/saves/qwen2.5_1.5B_qlora_spanish_smoke
+logging_steps: 1
+save_strategy: "no"
+plot_loss: false
 overwrite_output_dir: true
 report_to: none
 
 ### train
-per_device_train_batch_size: 4
-gradient_accumulation_steps: 8
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
 learning_rate: 0.00001
 num_train_epochs: 1.0
+max_steps: 3
 lr_scheduler_type: cosine
 warmup_ratio: 0.1
 bf16: true

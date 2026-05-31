@@ -104,9 +104,9 @@ cd /Users/wjx/Downloads/java/llm/cure-med/med/baseline_inference/qwen_models
 conda activate med-eval
 
 python evaluating_logic_of_generated_solutions.py --language Spanish --run_dir ../../outputs/sft/qwen2.5_1.5B_qlora_spanish
-python evaluating_language_of_generated_solutions.py --language Spanish --run_dir ../../outputs/sft/qwen2.5_1.5B_qlora_spanish
+python evaluating_language_of_generated_solutions.py --language Spanish --run_dir ../../outputs/sft/qwen2.5_1.5B_qlora_spanish --answer_only
 python compute_logic_accuracy.py --run_dir ../../outputs/sft/qwen2.5_1.5B_qlora_spanish
-python compute_language_accuracy.py --run_dir ../../outputs/sft/qwen2.5_1.5B_qlora_spanish
+python compute_language_accuracy.py --run_dir ../../outputs/sft/qwen2.5_1.5B_qlora_spanish --answer_only
 ```
 
 Baseline Spanish reference:
