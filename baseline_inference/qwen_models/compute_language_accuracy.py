@@ -53,6 +53,9 @@ def compute_language_stats():
         df = pd.read_csv(csv_path)
         df["Language_Score"] = df["Language_Score"].astype(str).str.strip().str.title()
         df = df[df["Language_Score"].isin(["True", "False"])]
+        empty_evaluated = None
+        if "Evaluated_Response" in df.columns:
+            empty_evaluated = (~df["Evaluated_Response"].fillna("").astype(str).str.strip().astype(bool)).sum()
 
         total = len(df)
         if total == 0:
@@ -63,13 +66,16 @@ def compute_language_stats():
         false_count = (df["Language_Score"] == "False").sum()
         accuracy = (true_count / total) * 100 if total > 0 else 0.0
 
-        per_lang_results.append({
+        result = {
             "Language": lang,
             "Total Samples": total,
             "Correct (True)": true_count,
             "Incorrect (False)": false_count,
             "Accuracy (%)": f"{accuracy:.2f}"
-        })
+        }
+        if empty_evaluated is not None:
+            result["Empty Evaluated"] = empty_evaluated
+        per_lang_results.append(result)
 
         global_true += true_count
         global_false += false_count

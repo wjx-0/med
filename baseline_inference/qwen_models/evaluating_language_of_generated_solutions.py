@@ -40,6 +40,11 @@ parser.add_argument(
     help="Evaluate only the text inside <answer>...</answer>. Useful for SFT/RFT outputs with English reasoning.",
 )
 parser.add_argument(
+    "--force",
+    action="store_true",
+    help="Re-evaluate all rows instead of resuming existing language scores.",
+)
+parser.add_argument(
     "--run_dir",
     type=str,
     default=None,
@@ -78,10 +83,71 @@ def extract_answer_text(test_response: str) -> str:
     """
     Return the final answer text if <answer> tags are present, otherwise return the full response.
     """
-    matches = re.findall(r"<answer>(.*?)</answer>", test_response, flags=re.IGNORECASE | re.DOTALL)
+    text = str(test_response).strip()
+    matches = re.findall(r"<answer\b[^>]*>(.*?)</answer>", text, flags=re.IGNORECASE | re.DOTALL)
     if matches:
         return matches[-1].strip()
-    return test_response.strip()
+
+    open_matches = list(re.finditer(r"<answer\b[^>]*>", text, flags=re.IGNORECASE))
+    if open_matches:
+        answer_text = text[open_matches[-1].end():]
+        answer_text = re.sub(r"</answer>", "", answer_text, flags=re.IGNORECASE)
+        return answer_text.strip()
+
+    return text
+
+
+def normalize_score(value):
+    if pd.isna(value):
+        return None
+    score = str(value).strip().title()
+    return score if score in {"True", "False"} else None
+
+
+def same_text(left, right) -> bool:
+    if pd.isna(left) and pd.isna(right):
+        return True
+    if pd.isna(left) or pd.isna(right):
+        return False
+    return str(left) == str(right)
+
+
+def restore_existing_scores(df: pd.DataFrame, output_csv_path: Path, lang: str) -> pd.DataFrame:
+    if args.force or not output_csv_path.exists():
+        if args.force and output_csv_path.exists():
+            print(f"Force re-evaluation requested for {lang}; ignoring existing output CSV.")
+        else:
+            print(f"Starting fresh for {lang}.")
+        return df
+
+    existing_df = pd.read_csv(output_csv_path)
+    if not {"Question", "Test Response", "Language_Score"}.issubset(existing_df.columns):
+        print(f"Existing output CSV for {lang} is missing required columns; starting fresh.")
+        return df
+
+    restored = 0
+    changed = 0
+    min_len = min(len(df), len(existing_df))
+    for idx in range(min_len):
+        if not (
+            same_text(df.at[idx, "Question"], existing_df.at[idx, "Question"])
+            and same_text(df.at[idx, "Test Response"], existing_df.at[idx, "Test Response"])
+        ):
+            changed += 1
+            continue
+
+        score = normalize_score(existing_df.at[idx, "Language_Score"])
+        if score is not None:
+            df.at[idx, "Language_Score"] = score
+            restored += 1
+
+    print(
+        f"Resumed {restored} unchanged language scores for {lang}; "
+        f"{changed} changed rows will be re-evaluated."
+    )
+    if len(existing_df) != len(df):
+        print(f"Existing output has {len(existing_df)} rows; current generation CSV has {len(df)} rows.")
+    return df
 
 
 def get_language_evaluation(question, test_response, language):
@@ -103,7 +169,8 @@ Determine if the model response is entirely in {language} (the language of the q
         try:
             gen_response = client.chat.completions.create(
                 model=DEEPSEEK_MODEL,
-                messages=[{"role": "user", "content": user_prompt}]
+                messages=[{"role": "user", "content": user_prompt}],
+                temperature=0,
             )
             output = gen_response.choices[0].message.content.strip()
             if output.lower() == "true":
@@ -138,20 +205,16 @@ for lang in selected_languages:
 
     if "Language_Score" not in df.columns:
         df["Language_Score"] = None
+    if "Evaluated_Response" not in df.columns:
+        df["Evaluated_Response"] = None
 
-    if output_csv_path.exists():
-        existing_df = pd.read_csv(output_csv_path)
-        min_len = min(len(df), len(existing_df))
-        df.loc[:min_len - 1, "Language_Score"] = existing_df.loc[:min_len - 1, "Language_Score"]
-        print(f"Resuming from existing output CSV for {lang}. Evaluated rows will be skipped.")
-    else:
-        print(f"Starting fresh for {lang}.")
+    df = restore_existing_scores(df, output_csv_path, lang)
 
     if args.num_samples != -1:
         df = df.head(args.num_samples)
         print(f"Limiting to first {args.num_samples} samples for {lang}.")
 
-    unevaluated_mask = df["Language_Score"].isnull()
+    unevaluated_mask = df["Language_Score"].apply(normalize_score).isnull()
     unevaluated_indices = df[unevaluated_mask].index.tolist()
 
     if not unevaluated_indices:
@@ -170,6 +233,7 @@ for lang in selected_languages:
             continue
 
         response_to_evaluate = extract_answer_text(test_response) if args.answer_only else test_response
+        df.at[idx, "Evaluated_Response"] = response_to_evaluate
         language_evaluation = get_language_evaluation(question, response_to_evaluate, lang)
         if language_evaluation is not None:
             df.at[idx, "Language_Score"] = language_evaluation

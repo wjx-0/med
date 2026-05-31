@@ -86,7 +86,8 @@ You are provided with a model-generated response (<Model Response>) and a refere
         try:
             gen_response = client.chat.completions.create(
                 model=DEEPSEEK_MODEL,
-                messages=[{"role": "user", "content": user_prompt}]
+                messages=[{"role": "user", "content": user_prompt}],
+                temperature=0,
             )
             output = gen_response.choices[0].message.content.strip()
             if output.lower() == "true":
